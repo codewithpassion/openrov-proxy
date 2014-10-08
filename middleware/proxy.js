@@ -1,29 +1,32 @@
 var url = require('url');
 var net = require('net');
 var http = require('http');
-var BinaryServer = require('binaryjs').BinaryServer;
 var express = require('express');
 var request = require('request');
 
 var app = express();
 var server = http.createServer(app);
-var bs = BinaryServer({port: 3011});
 var io = require('socket.io')(server);
+var SocketStream = require('socket.io-stream');
 
-bs.on('connection', function(client){
-  console.log('Connection to client');
-  // Incoming stream from browsers
-  client.on('stream', function(stream, meta) {
-    var requestData = JSON.parse(meta);
-    var handle = requestData.ssl ? handleSsl : handleHttp;
-    handle(requestData, stream);
+io.on('connection', function (socket) {
+  console.log('Connection to client: ' + socket.request.connection.remoteAddress)
+
+  var onError = function(error) {
+    socket.emit('proxy-error', error);
+  };
+
+  SocketStream(socket).on('request', function(stream, request) {
+    var handle = request.ssl ? handleSsl : handleHttp;
+    handle(request, stream, onError);
   });
 });
+
 server.listen(3001, function() {
-  console.log('HTTP and BinaryJS server started on port 3001');
+  console.log('HTTP/socket.io server started on port 3001');
 });
 
-function handleHttp(requestData, stream) {
+function handleHttp(requestData, stream, onError) {
   console.log('Stream requested, url: ' + requestData.url);
   // we first make a HEAD request to see if the file is there. If not, or there
   // is any other issue, we return the error to the requestor as a JSON object.
@@ -31,14 +34,16 @@ function handleHttp(requestData, stream) {
     if (error || (response !== undefined && response.statusCode >= 400)) {
       var statusCode = 0;
       if (response) {
+        console.log("Status code: " + response.statusCode);
         statusCode = response.statusCode;
       }
-      stream.write(JSON.stringify({ error: error, statusCode: statusCode}));
       stream.end();
       console.log('There was an error: ' + error + '\nStatus Code: ' + statusCode);
+      onError({ error: error ? error.toString() : 'Unknown error', statusCode: statusCode}); // the 'toString()' is needed to create a
+                                                                   // copy of the error object.
+                                                                   // Otherwise error isn't populated for some reason.
     }
     else {
-
       // once we are sure all is good, we go ahead and request the file and pipe it to the requestor
       request(requestData.url, function (error, response, body) {
         console.log('Done');
@@ -52,8 +57,8 @@ function handleHttp(requestData, stream) {
   });
 }
 
-function handleSsl(requestData, stream) {
-  var requestUrl = requestData.url;
+function handleSsl(request, stream, onError) {
+  var requestUrl = request.url;
   var srvUrl = url.parse(requestUrl );
 
   var client = net.connect(
@@ -70,5 +75,10 @@ function handleSsl(requestData, stream) {
   client.on('end', function() {
     console.log('client disconnected');
     stream.end();
+  });
+
+  client.on('error', function(error) {
+    console.log('Client error ' + error);
+    onError({error: error, statusCode: 500});
   });
 }

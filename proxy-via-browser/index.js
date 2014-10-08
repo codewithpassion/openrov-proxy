@@ -1,26 +1,25 @@
 var fs = require('fs');
 var app = require('express')();
 var http = require('http').Server(app);
-var BinaryServer = require('binaryjs').BinaryServer;
-var bs = BinaryServer({port: 3010});
 var io = require('socket.io')(http);
+var SocketStream = require('socket.io-stream');
 
-var currentClient = null;
+var port = process.env.PORT || 3000;
+var browserSocket = null;
 
 io.on('connection', function (socket) {
   console.log('Socket.IO: connected');
-});
-
-bs.on('connection', function(client) {
-  console.log('Connection to client');
   // this could be improved as right now we only keep one client (browser).
   // Should not be an issue as we only should have one browser connected anyway.
-  currentClient = client;
+  browserSocket = socket;
 });
 
 app.use(function(req, res){
   if (req.url == '/' ) { // if the request is for '/' we send the index file
     res.sendfile(__dirname + '/public/index.html');
+  }
+  else if (req.url == '/js/socket.io-stream.js' ) {
+    res.sendfile(__dirname + '/node_modules/socket.io-stream/socket.io-stream.js');
   }
   // otherwise we proxying the request
   else { proxyReq(req, res); }
@@ -30,9 +29,8 @@ http.addListener('connect', function(req, socket, head) {
   proxyReq(req, socket, head);
 });
 
-
-http.listen(3000, function(){
-  console.log('listening on *:3000');
+http.listen(port, function(){
+  console.log('listening on *:' + port);
 });
 
 // This function acts as a HTTP proxy.
@@ -41,22 +39,27 @@ http.listen(3000, function(){
 function proxyReq(req, res, head) {
   console.log("Request: " + req.url);
 
-  if (currentClient !== null) {
+  if (browserSocket !== null) {
     var ssl = req.method === 'CONNECT';
     var url = (ssl ? 'https://' : '') + req.url;
-    var stream = currentClient.createStream( JSON.stringify({ head: head, url: url, ssl: ssl }) );
+    var stream =  SocketStream.createStream();
+
+    SocketStream(browserSocket).emit('request', stream, { head: head, url: url, ssl: ssl });
+
     console.log("Created stream for: " + url);
     res.statusCode = 200;
 
-    stream.on('data', function(data) {
-      // error handling
-      if (data[0] == '{' && data[data.length-1] == '}') {
-        error = JSON.parse(data);
-        console.log("Error occurd " + JSON.stringify(error.error) + ' ' + error.statusCode);
+    var onError;
+    onError = function(error) {
+      console.log("Error occurd " + JSON.stringify(error) + ' ');
+      if (error.statusCode) {
         res.statusCode = error.statusCode === 0 ? 500 : error.statusCode;
-        res.end("Error");
       }
-    });
+      res.end("Error");
+      browserSocket.removeListener('proxy-error', onError);
+    }
+
+    browserSocket.on('proxy-error', onError);
 
     // this is where some of the magic happens.
     // We sent the url to the proxy and the proxy starts a download

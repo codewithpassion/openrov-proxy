@@ -6,77 +6,70 @@
   <body>
     <ul id="messages"></ul>
     <script src="https://code.jquery.com/jquery-2.1.1.min.js"></script>
-    <script src="http://cdn.binaryjs.com/0/binary.js"></script>
     <script src="/socket.io/socket.io.js"></script>
+    <script src="js/socket.io-stream.js"></script>
 
     <script>
+      var SocketStream = ss; // socket.io-stream imports as ss, make it more readable
+
       var host = 'build.openrov.com';
-      //var host = 'localhost';
+      if (window.location.hostname === 'localhost') {
+        host = 'localhost';
+      }
       var port = '3001';
-      var bjsPort = '3010';
-      // Socket and BinaryClient to the proxy service
-      var proxy = {
-        socket: io.connect('http://' + host + ':' + port),
-        client: undefined
-      };
 
-      // Socket and BinaryClient on the ROV
-      var rov = {
-        client: undefined,
-        socket: io.connect()
-      };
+      // Socket to the proxy service
+      var middlewareSocket = io.connect('http://' + host + ':' + port);
+      // Socket on the ROV
+      var rovSocket = io.connect();
 
-      proxy.socket.on('connect', function() {
-        proxy.client = new BinaryClient('ws://' + host + ':3011');
-        $('#messages').append('<li>Connected to proxy socket.io</li>');
-
-        proxy.client.on('open', function() {
-          $('#messages').append('<li>Connected to proxy</li>');
-        });
-        proxy.client.on('close', function() {
-          $('#messages').append('<li>Disconnected from proxy</li>');
-        });
+      middlewareSocket.on('connect', function() {
+        $('#messages').append('<li>Connected to middleware</li>');
       });
 
-      rov.socket.on('connect', function() {
-        rov.client = new BinaryClient('ws://' + document.location.hostname + ':3010');
-        $('#messages').append('<li>Connected to ROV socket.io</li>')
-  
-        rov.client.on('open', function() {
-          $('#messages').append('<li>Connected to ROV</li>');
+      middlewareSocket.on('disconnect', function() {
+        $('#messages').append('<li>Disconnected from middleware</li>');
+      });
 
-          // We got a request from the ROV HTTP proxy
-          rov.client.on('stream', function(rovStream, url) {
-            $('#messages').append('<li>Requested ' + url + '</li>');
+      middlewareSocket.on('proxy-error', function(error) {
+        $('#messages').append('<li>Error on middleware: ' + JSON.stringify(error) +'</li>');
+        rovSocket.emit('proxy-error', error);
+      });
 
-            if (proxy.client) {
-              // create a stream to the proxy on the server
-              // this will trigger the download of the requested file
-              proxyStream = proxy.client.createStream(url);
-              // we pipe the incoming data to the rovStream
+      rovSocket.on('connect', function() {
+        $('#messages').append('<li>Connected to ROV</li>')
+      });
+      SocketStream(rovSocket).on('request', function(rovStream, url){
+        $('#messages').append('<li>Requested ' + JSON.stringify(url) + '</li>');
 
-              proxyStream.on('data', function(data) {
-                rovStream.write(data);
-                console.log('#');
-              });
-              rovStream.on('data', function(data) {
-                proxyStream.write(data);
-                console.log('@');
-              });
+        // We got a request from the ROV HTTP proxy
+        if (middlewareSocket && middlewareSocket.connected) {
 
-              // when the server is done downloading it will end the stream
-              proxyStream.on('end', function() {
-                $('#messages').append('<li>End of stream ' + url + '</li>');
-                // end the stream to the rov. This will cause the proxy to end the response
-                rovStream.end();
-              });
-            }
+          // create a stream to the proxy on the server
+          // this will trigger the download of the requested file
+          middlewareStream = SocketStream.createStream();
+          SocketStream(middlewareSocket).emit('request', middlewareStream, url);
+
+          // we pipe the incoming data to the rovStream
+          middlewareStream.on('data', function(data) {
+            rovStream.write(data);
+            console.log('#');
+          });
+          rovStream.on('data', function(data) {
+            middlewareStream.write(data);
+            console.log('@');
           });
 
-        });
-        rov.client.on('close', function() {
-          $('#messages').append('<li>Disconnected from ROV</li>');
-        });
+          // when the server is done downloading it will end the stream
+          middlewareStream.on('end', function() {
+            $('#messages').append('<li>End of stream ' + JSON.stringify(url) + '</li>');
+            // end the stream to the rov. This will cause the proxy to end the response
+            rovStream.end();
+          });
+        }
+      });
+      rovSocket.on('disconnect', function() {
+        $('#messages').append('<li>Disconnected from ROV</li>');
       });
 
 </script>
