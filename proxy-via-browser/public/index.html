@@ -39,7 +39,7 @@
       rovSocket.on('connect', function() {
         $('#messages').append('<li>Connected to ROV</li>')
       });
-      SocketStream(rovSocket).on('request', function(rovStream, url){
+      SocketStream(rovSocket).on('request', function(rovStream, url, callback){
         $('#messages').append('<li>Requested ' + JSON.stringify(url) + '</li>');
 
         // We got a request from the ROV HTTP proxy
@@ -48,7 +48,11 @@
           // create a stream to the proxy on the server
           // this will trigger the download of the requested file
           middlewareStream = SocketStream.createStream();
-          SocketStream(middlewareSocket).emit('request', middlewareStream, url);
+          SocketStream(middlewareSocket).emit('request', middlewareStream, url,
+          function() {
+            $('#messages').append('<li>End of stream ' + JSON.stringify(url) + '</li>');
+            callback();
+          });
 
           // we pipe the incoming data to the rovStream
           middlewareStream.on('data', function(data) {
@@ -58,13 +62,6 @@
           rovStream.on('data', function(data) {
             middlewareStream.write(data);
             console.log('@');
-          });
-
-          // when the server is done downloading it will end the stream
-          middlewareStream.on('end', function() {
-            $('#messages').append('<li>End of stream ' + JSON.stringify(url) + '</li>');
-            // end the stream to the rov. This will cause the proxy to end the response
-            rovStream.end();
           });
         }
       });

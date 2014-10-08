@@ -16,9 +16,9 @@ io.on('connection', function (socket) {
     socket.emit('proxy-error', error);
   };
 
-  SocketStream(socket).on('request', function(stream, request) {
+  SocketStream(socket).on('request', function(stream, request, callback) {
     var handle = request.ssl ? handleSsl : handleHttp;
-    handle(request, stream, onError);
+    handle(request, stream, onError, callback);
   });
 });
 
@@ -26,7 +26,7 @@ server.listen(3001, function() {
   console.log('HTTP/socket.io server started on port 3001');
 });
 
-function handleHttp(requestData, stream, onError) {
+function handleHttp(requestData, stream, onError, callback) {
   console.log('Stream requested, url: ' + requestData.url);
   // we first make a HEAD request to see if the file is there. If not, or there
   // is any other issue, we return the error to the requestor as a JSON object.
@@ -37,7 +37,7 @@ function handleHttp(requestData, stream, onError) {
         console.log("Status code: " + response.statusCode);
         statusCode = response.statusCode;
       }
-      stream.end();
+      callback();
       console.log('There was an error: ' + error + '\nStatus Code: ' + statusCode);
       onError({ error: error ? error.toString() : 'Unknown error', statusCode: statusCode}); // the 'toString()' is needed to create a
                                                                    // copy of the error object.
@@ -47,7 +47,7 @@ function handleHttp(requestData, stream, onError) {
       // once we are sure all is good, we go ahead and request the file and pipe it to the requestor
       request(requestData.url, function (error, response, body) {
         console.log('Done');
-        stream.end();
+        callback();
       })
         // this is where some magic happens.
         // we pipe the data from the 'request()' directly to the stream
@@ -57,7 +57,7 @@ function handleHttp(requestData, stream, onError) {
   });
 }
 
-function handleSsl(request, stream, onError) {
+function handleSsl(request, stream, onError, callback) {
   var requestUrl = request.url;
   var srvUrl = url.parse(requestUrl );
 
@@ -69,12 +69,18 @@ function handleSsl(request, stream, onError) {
         '\r\n');
     });
 
-  stream.pipe(client);
-  client.pipe(stream);
+  stream.on('data', function(data) {
+    client.write(data);
+    console.log('#' + data);
+  });
+  client.on('data', function(data) {
+    stream.write(data);
+    console.log('@' + data);
+  });
 
   client.on('end', function() {
-    console.log('client disconnected');
-    stream.end();
+    console.log('Done');
+    callback();
   });
 
   client.on('error', function(error) {

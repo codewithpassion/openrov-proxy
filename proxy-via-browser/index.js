@@ -3,9 +3,13 @@ var app = require('express')();
 var http = require('http').Server(app);
 var io = require('socket.io')(http);
 var SocketStream = require('socket.io-stream');
+var wait=require('wait.for');
 
 var port = process.env.PORT || 3000;
 var browserSocket = null;
+var maxClients = 2;
+var currentClients = 0;
+var active = true;
 
 io.on('connection', function (socket) {
   console.log('Socket.IO: connected');
@@ -24,6 +28,13 @@ app.use(function(req, res){
   // otherwise we proxying the request
   else { proxyReq(req, res); }
 });
+
+function activate() {
+  if (!active && currentClients < maxClients) {
+    http.watcher.start();
+    active = true;
+  }
+}
 
 http.addListener('connect', function(req, socket, head) {
   proxyReq(req, socket, head);
@@ -44,7 +55,15 @@ function proxyReq(req, res, head) {
     var url = (ssl ? 'https://' : '') + req.url;
     var stream =  SocketStream.createStream();
 
-    SocketStream(browserSocket).emit('request', stream, { head: head, url: url, ssl: ssl });
+    SocketStream(browserSocket).emit(
+      'request',
+      stream,
+      { head: head, url: url, ssl: ssl },
+      function(){
+        res.end();
+        currentClients--;
+        activate();
+      });
 
     console.log("Created stream for: " + url);
     res.statusCode = 200;
@@ -68,15 +87,16 @@ function proxyReq(req, res, head) {
     // client.
     stream.pipe(res);
     req.socket.pipe(stream);
-
-    stream.on('end', function() {
-      // When the proxy tells us everything was sent, we end the response to the client.
-      res.end();
-    });
   }
   else {
     console.log('No client connected!');
     res.statusCode = 500;
     res.end("No client connected!");
+  }
+
+  currentClients++;
+  if (currentClients >= maxClients) {
+    http.watcher.stop();
+    active = false;
   }
 }
